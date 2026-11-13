@@ -1,0 +1,991 @@
+=== FILE: lib/core/constants/app_colors.dart ===
+import 'package:flutter/material.dart';
+
+/// All RajRide brand colors live here, so we can change them in one place.
+class AppColors {
+  AppColors._();
+
+  static const Color primary = Color(0xFF1B9E4B);
+  static const Color primaryDark = Color(0xFF0E7A36);
+  static const Color primaryLight = Color(0xFFE6F6EC);
+  static const Color background = Color(0xFFF7F9F8);
+  static const Color surface = Colors.white;
+  static const Color textDark = Color(0xFF1C2A22);
+  static const Color textGrey = Color(0xFF6B7A72);
+}
+=== END ===
+=== FILE: lib/core/constants/map_constants.dart ===
+/// All map settings live here, so we can change the tile provider
+/// in ONE place later (for example when we move to our own tile server).
+class MapConstants {
+  MapConstants._();
+
+  /// Free OpenFreeMap style. Map data comes from OpenStreetMap.
+  /// - No API key and no account needed.
+  /// - It is a public service run on donations with NO guarantee of
+  ///   availability, so it is fine for development and testing, but we must
+  ///   plan our own tile hosting (or a paid SLA provider) before a real launch.
+  /// - MapLibre shows the required attribution on the map automatically.
+  static const String styleUrl = 'https://tiles.openfreemap.org/styles/liberty';
+
+  /// Center of Rajshahi city.
+  static const double rajshahiLat = 24.3745;
+  static const double rajshahiLng = 88.6042;
+
+  /// Zoom when the map first opens (whole city visible).
+  static const double defaultZoom = 12.5;
+
+  /// Zoom when we jump to the user's position (street level).
+  static const double userZoom = 16;
+}
+=== END ===
+=== FILE: lib/core/services/location_service.dart ===
+import 'package:geolocator/geolocator.dart';
+
+/// The four situations our app cares about.
+enum LocationStatus {
+  /// GPS is on and the user allowed location. All good.
+  granted,
+
+  /// The phone's GPS / location switch is turned off.
+  serviceDisabled,
+
+  /// The user said "No" (we may ask again).
+  denied,
+
+  /// The user said "Don't ask again". Only phone Settings can fix it.
+  deniedForever,
+}
+
+/// Small helper around the `geolocator` package, so the rest of the app
+/// never talks to geolocator directly.
+class LocationService {
+  LocationService._();
+
+  /// Checks GPS and permission.
+  /// If [askPermission] is true, shows the Android permission pop-up when needed.
+  static Future<LocationStatus> check({required bool askPermission}) async {
+    final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) return LocationStatus.serviceDisabled;
+
+    var permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied && askPermission) {
+      permission = await Geolocator.requestPermission();
+    }
+
+    switch (permission) {
+      case LocationPermission.whileInUse:
+      case LocationPermission.always:
+        return LocationStatus.granted;
+      case LocationPermission.deniedForever:
+        return LocationStatus.deniedForever;
+      case LocationPermission.denied:
+      case LocationPermission.unableToDetermine:
+        return LocationStatus.denied;
+    }
+  }
+
+  /// Returns the user's position, or null if it could not be found.
+  /// Only call this after [check] returned [LocationStatus.granted].
+  static Future<Position?> getCurrentPosition() async {
+    try {
+      return await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 15),
+        ),
+      );
+    } catch (_) {
+      // No fresh GPS fix in time. Try the last position the phone remembers.
+      try {
+        return await Geolocator.getLastKnownPosition();
+      } catch (_) {
+        return null;
+      }
+    }
+  }
+
+  /// Opens the phone's location (GPS) switch screen.
+  static Future<bool> openLocationSettings() => Geolocator.openLocationSettings();
+
+  /// Opens RajRide's page in the phone's app settings.
+  static Future<bool> openAppSettings() => Geolocator.openAppSettings();
+}
+=== END ===
+=== FILE: lib/core/theme/app_theme.dart ===
+import 'package:flutter/material.dart';
+
+import '../constants/app_colors.dart';
+
+/// The overall look of the app (green and white theme).
+class AppTheme {
+  AppTheme._();
+
+  static ThemeData get light {
+    return ThemeData(
+      useMaterial3: true,
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: AppColors.primary,
+        primary: AppColors.primary,
+      ),
+      scaffoldBackgroundColor: AppColors.background,
+      elevatedButtonTheme: ElevatedButtonThemeData(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: AppColors.primary,
+          foregroundColor: Colors.white,
+          minimumSize: const Size.fromHeight(52),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
+        ),
+      ),
+    );
+  }
+}
+=== END ===
+=== FILE: lib/features/home/home_screen.dart ===
+import 'package:flutter/material.dart';
+
+import '../../core/constants/app_colors.dart';
+import '../../shared/widgets/rajride_logo.dart';
+import '../map/map_screen.dart';
+
+/// The main screen. Most buttons still show a "coming soon" message.
+/// The map card opens the map (Day 4).
+class HomeScreen extends StatelessWidget {
+  const HomeScreen({super.key});
+
+  void _showComingSoon(BuildContext context, String feature) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text('$feature - coming soon!')));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildHeader(),
+              const SizedBox(height: 20),
+              _buildSearchBox(context),
+              const SizedBox(height: 24),
+              const Text(
+                'Choose your ride',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.textDark,
+                ),
+              ),
+              const SizedBox(height: 12),
+              _buildRideOptions(context),
+              const SizedBox(height: 24),
+              _buildMapCard(context),
+            ],
+          ),
+        ),
+      ),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: 0,
+        onDestinationSelected: (index) {
+          if (index == 1) _showComingSoon(context, 'Activity');
+          if (index == 2) _showComingSoon(context, 'Account');
+        },
+        destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.home_outlined),
+            selectedIcon: Icon(Icons.home),
+            label: 'Home',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.receipt_long_outlined),
+            selectedIcon: Icon(Icons.receipt_long),
+            label: 'Activity',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.person_outline),
+            selectedIcon: Icon(Icons.person),
+            label: 'Account',
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHeader() {
+    return const Row(
+      children: [
+        RajRideLogo(size: 46),
+        SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Welcome to RajRide',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.textDark,
+                ),
+              ),
+              SizedBox(height: 2),
+              Row(
+                children: [
+                  Icon(Icons.location_on, size: 16, color: AppColors.primary),
+                  SizedBox(width: 4),
+                  Text(
+                    'Rajshahi, Bangladesh',
+                    style: TextStyle(color: AppColors.textGrey),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        Icon(Icons.notifications_none, color: AppColors.textDark),
+      ],
+    );
+  }
+
+  Widget _buildSearchBox(BuildContext context) {
+    return Material(
+      color: AppColors.surface,
+      borderRadius: BorderRadius.circular(16),
+      elevation: 2,
+      shadowColor: Colors.black26,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: () => _showComingSoon(context, 'Destination search'),
+        child: const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 18),
+          child: Row(
+            children: [
+              Icon(Icons.search, color: AppColors.primary),
+              SizedBox(width: 12),
+              Text(
+                'Where to?',
+                style: TextStyle(fontSize: 16, color: AppColors.textGrey),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRideOptions(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: _RideOption(
+            icon: Icons.two_wheeler,
+            label: 'Bike',
+            enabled: true,
+            onTap: () => _showComingSoon(context, 'Bike ride'),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: _RideOption(
+            icon: Icons.directions_car,
+            label: 'Car',
+            enabled: false,
+            onTap: () => _showComingSoon(context, 'Car ride'),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: _RideOption(
+            icon: Icons.electric_rickshaw,
+            label: 'CNG',
+            enabled: false,
+            onTap: () => _showComingSoon(context, 'CNG ride'),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMapCard(BuildContext context) {
+    return Material(
+      color: AppColors.primaryLight,
+      borderRadius: BorderRadius.circular(20),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: () {
+          // push (not pushReplacement): the Back button returns to Home.
+          Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const MapScreen()),
+          );
+        },
+        child: const SizedBox(
+          height: 200,
+          width: double.infinity,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.map_outlined, size: 48, color: AppColors.primary),
+              SizedBox(height: 8),
+              Text(
+                'Open map',
+                style: TextStyle(
+                  color: AppColors.primaryDark,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 16,
+                ),
+              ),
+              SizedBox(height: 2),
+              Text(
+                'See Rajshahi and your location',
+                style: TextStyle(color: AppColors.textGrey),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// One ride type card (Bike / Car / CNG).
+class _RideOption extends StatelessWidget {
+  const _RideOption({
+    required this.icon,
+    required this.label,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color color = enabled ? AppColors.primary : Colors.grey;
+
+    return Material(
+      color: AppColors.surface,
+      borderRadius: BorderRadius.circular(16),
+      elevation: 1,
+      shadowColor: Colors.black26,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 18),
+          child: Column(
+            children: [
+              Icon(icon, size: 34, color: color),
+              const SizedBox(height: 8),
+              Text(
+                label,
+                style: TextStyle(fontWeight: FontWeight.w600, color: color),
+              ),
+              if (!enabled)
+                const Text(
+                  'Soon',
+                  style: TextStyle(fontSize: 11, color: Colors.grey),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+=== END ===
+=== FILE: lib/features/map/map_screen.dart ===
+import 'package:flutter/material.dart';
+import 'package:maplibre_gl/maplibre_gl.dart';
+
+import '../../core/constants/app_colors.dart';
+import '../../core/constants/map_constants.dart';
+import '../../core/services/location_service.dart';
+
+/// All texts of this screen in one place.
+/// (Day 3 Bangla/English support has not been built yet. When it is,
+/// these are the texts to translate.)
+class _Texts {
+  static const loading = 'Loading map… (internet needed)';
+  static const gpsOff = 'Your GPS is turned off. Turn it on to see where you are.';
+  static const turnOnGps = 'Turn on GPS';
+  static const denied = 'RajRide needs your permission to show where you are.';
+  static const allow = 'Allow location';
+  static const deniedForever =
+      'Location permission is blocked. Open settings and allow location for RajRide.';
+  static const openSettings = 'Open settings';
+  static const noFix = 'Couldn’t find your location yet. Please try again.';
+  static const myLocation = 'My location';
+}
+
+/// Interactive map centered on Rajshahi. Shows the user's location when allowed.
+class MapScreen extends StatefulWidget {
+  const MapScreen({super.key});
+
+  @override
+  State<MapScreen> createState() => _MapScreenState();
+}
+
+class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
+  MapLibreMapController? _controller;
+  LocationStatus? _status;
+  bool _styleLoaded = false;
+  bool _didCenterOnUser = false;
+
+  bool get _locationGranted => _status == LocationStatus.granted;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _checkLocation(askPermission: true);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  /// When the user comes back from phone Settings, check again (no pop-up).
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _checkLocation(askPermission: false);
+    }
+  }
+
+  Future<void> _checkLocation({required bool askPermission}) async {
+    final status = await LocationService.check(askPermission: askPermission);
+    if (!mounted) return;
+    setState(() => _status = status);
+    if (status == LocationStatus.granted && !_didCenterOnUser) {
+      await _moveToUser();
+    }
+  }
+
+  void _onMapCreated(MapLibreMapController controller) {
+    _controller = controller;
+    if (_locationGranted && !_didCenterOnUser) {
+      _moveToUser();
+    }
+  }
+
+  /// Smoothly moves the camera to the user's current position.
+  Future<void> _moveToUser({bool showError = false}) async {
+    final controller = _controller;
+    if (controller == null) return;
+
+    final position = await LocationService.getCurrentPosition();
+    if (!mounted) return;
+    if (position == null) {
+      if (showError) _showMessage(_Texts.noFix);
+      return;
+    }
+
+    _didCenterOnUser = true;
+    await controller.animateCamera(
+      CameraUpdate.newLatLngZoom(
+        LatLng(position.latitude, position.longitude),
+        MapConstants.userZoom,
+      ),
+    );
+  }
+
+  Future<void> _onLocationButtonPressed() async {
+    var status = _status;
+    if (status != LocationStatus.granted) {
+      status = await LocationService.check(askPermission: true);
+      if (!mounted) return;
+      setState(() => _status = status);
+    }
+    if (status == LocationStatus.granted) {
+      await _moveToUser(showError: true);
+    }
+  }
+
+  Future<void> _onBannerActionPressed() async {
+    switch (_status) {
+      case LocationStatus.serviceDisabled:
+        await LocationService.openLocationSettings();
+      case LocationStatus.deniedForever:
+        await LocationService.openAppSettings();
+      case LocationStatus.denied:
+      case LocationStatus.granted:
+      case null:
+        await _checkLocation(askPermission: true);
+    }
+  }
+
+  void _showMessage(String text) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Stack(
+        children: [
+          MapLibreMap(
+            styleString: MapConstants.styleUrl,
+            initialCameraPosition: const CameraPosition(
+              target: LatLng(MapConstants.rajshahiLat, MapConstants.rajshahiLng),
+              zoom: MapConstants.defaultZoom,
+            ),
+            onMapCreated: _onMapCreated,
+            onStyleLoadedCallback: () {
+              if (mounted) setState(() => _styleLoaded = true);
+            },
+            myLocationEnabled: _locationGranted,
+            compassEnabled: true,
+          ),
+          if (!_styleLoaded) _buildLoadingOverlay(),
+          Positioned.fill(
+            child: SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Stack(
+                  children: [
+                    Align(
+                      alignment: Alignment.topCenter,
+                      child: _buildTopArea(),
+                    ),
+                    Align(
+                      alignment: Alignment.bottomRight,
+                      child: FloatingActionButton(
+                        tooltip: _Texts.myLocation,
+                        backgroundColor: Colors.white,
+                        foregroundColor: AppColors.primary,
+                        onPressed: _onLocationButtonPressed,
+                        child: const Icon(Icons.my_location),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLoadingOverlay() {
+    return Positioned.fill(
+      child: Container(
+        color: AppColors.primaryLight,
+        child: const Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(color: AppColors.primary),
+            SizedBox(height: 16),
+            Text(
+              _Texts.loading,
+              style: TextStyle(color: AppColors.primaryDark),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Back button, plus a warning card when location is not available.
+  Widget _buildTopArea() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Align(
+          alignment: Alignment.centerLeft,
+          child: Material(
+            color: Colors.white,
+            shape: const CircleBorder(),
+            elevation: 3,
+            child: IconButton(
+              icon: const Icon(Icons.arrow_back, color: AppColors.textDark),
+              onPressed: () => Navigator.of(context).pop(),
+            ),
+          ),
+        ),
+        if (_status != null && !_locationGranted) ...[
+          const SizedBox(height: 12),
+          _buildLocationBanner(),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildLocationBanner() {
+    final String message;
+    final String buttonLabel;
+    switch (_status) {
+      case LocationStatus.serviceDisabled:
+        message = _Texts.gpsOff;
+        buttonLabel = _Texts.turnOnGps;
+      case LocationStatus.deniedForever:
+        message = _Texts.deniedForever;
+        buttonLabel = _Texts.openSettings;
+      case LocationStatus.denied:
+      case LocationStatus.granted:
+      case null:
+        message = _Texts.denied;
+        buttonLabel = _Texts.allow;
+    }
+
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(16),
+      elevation: 3,
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(Icons.location_off, color: AppColors.primary),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    message,
+                    style: const TextStyle(color: AppColors.textDark),
+                  ),
+                ),
+              ],
+            ),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                onPressed: _onBannerActionPressed,
+                child: Text(buttonLabel),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+=== END ===
+=== FILE: lib/features/splash/splash_screen.dart ===
+import 'package:flutter/material.dart';
+
+import '../../core/constants/app_colors.dart';
+import '../../shared/widgets/rajride_logo.dart';
+import '../welcome/welcome_screen.dart';
+
+/// Shown for about 2.5 seconds when the app opens, then goes to Welcome.
+class SplashScreen extends StatefulWidget {
+  const SplashScreen({super.key});
+
+  @override
+  State<SplashScreen> createState() => _SplashScreenState();
+}
+
+class _SplashScreenState extends State<SplashScreen>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late final Animation<double> _fade;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1200),
+    );
+    _fade = CurvedAnimation(parent: _controller, curve: Curves.easeIn);
+    _controller.forward();
+
+    Future.delayed(const Duration(milliseconds: 2500), _goToWelcome);
+  }
+
+  void _goToWelcome() {
+    if (!mounted) return;
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(builder: (_) => const WelcomeScreen()),
+    );
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Container(
+        width: double.infinity,
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [AppColors.primary, AppColors.primaryDark],
+          ),
+        ),
+        child: FadeTransition(
+          opacity: _fade,
+          child: const Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              RajRideLogo(size: 120, light: true),
+              SizedBox(height: 24),
+              Text(
+                'RajRide',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 36,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 1,
+                ),
+              ),
+              SizedBox(height: 8),
+              Text(
+                'Your ride, your Rajshahi',
+                style: TextStyle(color: Colors.white70, fontSize: 16),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+=== END ===
+=== FILE: lib/features/welcome/welcome_screen.dart ===
+import 'package:flutter/material.dart';
+
+import '../../core/constants/app_colors.dart';
+import '../../shared/widgets/rajride_logo.dart';
+import '../home/home_screen.dart';
+
+/// Shown after the splash screen. The "Get Started" button opens Home.
+class WelcomeScreen extends StatelessWidget {
+  const WelcomeScreen({super.key});
+
+  void _goToHome(BuildContext context) {
+    // pushReplacement means the Back button will NOT return to this screen.
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(builder: (_) => const HomeScreen()),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: SingleChildScrollView(
+        child: Column(
+          children: [
+            _buildHero(),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Welcome to RajRide',
+                    style: TextStyle(
+                      fontSize: 28,
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.textDark,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Safe, simple and affordable rides in Rajshahi.',
+                    style: TextStyle(fontSize: 16, color: AppColors.textGrey),
+                  ),
+                  const SizedBox(height: 28),
+                  const _FeatureTile(
+                    icon: Icons.shield_outlined,
+                    title: 'Safe rides',
+                    subtitle: 'Trusted drivers and trip safety tools',
+                  ),
+                  const SizedBox(height: 16),
+                  const _FeatureTile(
+                    icon: Icons.payments_outlined,
+                    title: 'Fair fares in BDT',
+                    subtitle: 'Know the estimated price before you ride',
+                  ),
+                  const SizedBox(height: 16),
+                  const _FeatureTile(
+                    icon: Icons.bolt_outlined,
+                    title: 'Quick pickup',
+                    subtitle: 'Find a nearby ride in minutes',
+                  ),
+                  const SizedBox(height: 36),
+                  ElevatedButton(
+                    onPressed: () => _goToHome(context),
+                    child: const Text(
+                      'Get Started',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  const Center(
+                    child: Text(
+                      'Now available in Rajshahi',
+                      style: TextStyle(color: AppColors.textGrey),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// The green curved area at the top with the logo.
+  Widget _buildHero() {
+    return Container(
+      width: double.infinity,
+      height: 300,
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [AppColors.primary, AppColors.primaryDark],
+        ),
+        borderRadius: BorderRadius.only(
+          bottomLeft: Radius.circular(40),
+          bottomRight: Radius.circular(40),
+        ),
+      ),
+      child: const SafeArea(
+        child: Center(child: RajRideLogo(size: 120, light: true)),
+      ),
+    );
+  }
+}
+
+/// One row with a round icon, a title and a short description.
+class _FeatureTile extends StatelessWidget {
+  const _FeatureTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Container(
+          width: 48,
+          height: 48,
+          decoration: const BoxDecoration(
+            color: AppColors.primaryLight,
+            shape: BoxShape.circle,
+          ),
+          child: Icon(icon, color: AppColors.primary),
+        ),
+        const SizedBox(width: 16),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textDark,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                subtitle,
+                style: const TextStyle(color: AppColors.textGrey),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+=== END ===
+=== FILE: lib/main.dart ===
+import 'package:flutter/material.dart';
+
+import 'core/theme/app_theme.dart';
+import 'features/splash/splash_screen.dart';
+
+void main() {
+  runApp(const RajRideApp());
+}
+
+class RajRideApp extends StatelessWidget {
+  const RajRideApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'RajRide',
+      debugShowCheckedModeBanner: false,
+      theme: AppTheme.light,
+      home: const SplashScreen(),
+    );
+  }
+}
+=== END ===
+=== FILE: lib/shared/widgets/rajride_logo.dart ===
+import 'package:flutter/material.dart';
+
+import '../../core/constants/app_colors.dart';
+
+/// A simple round RajRide logo (temporary icon-based logo).
+/// Set [light] to true to show a white logo on a green background.
+class RajRideLogo extends StatelessWidget {
+  const RajRideLogo({super.key, this.size = 96, this.light = false});
+
+  final double size;
+  final bool light;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: light ? Colors.white : AppColors.primary,
+        shape: BoxShape.circle,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withAlpha(40),
+            blurRadius: size * 0.2,
+            offset: Offset(0, size * 0.06),
+          ),
+        ],
+      ),
+      child: Icon(
+        Icons.two_wheeler,
+        size: size * 0.55,
+        color: light ? AppColors.primary : Colors.white,
+      ),
+    );
+  }
+}
+=== END ===
