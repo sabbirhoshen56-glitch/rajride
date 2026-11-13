@@ -1,0 +1,91 @@
+name: Build RajRide APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Get the repository files
+        uses: actions/checkout@v4
+
+      - name: Install Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Show versions
+        run: |
+          flutter --version
+          java -version
+
+      - name: Create a fresh Flutter Android project
+        run: flutter create --org com.rajride --project-name rajride --platforms=android app
+
+      - name: Copy RajRide source code into the project
+        run: |
+          python3 - << 'PY'
+          import re, pathlib
+          text = open('rajride_bundle.txt', encoding='utf-8').read().replace('\r\n', '\n')
+          pattern = re.compile(r'^=== FILE: (.+?) ===\n(.*?)^=== END ===$', re.S | re.M)
+          files = pattern.findall(text)
+          if not files:
+              raise SystemExit('No files found in rajride_bundle.txt')
+          for path, content in files:
+              target = pathlib.Path('app') / path.strip()
+              target.parent.mkdir(parents=True, exist_ok=True)
+              target.write_text(content, encoding='utf-8')
+              print('wrote', target)
+          PY
+          rm -f app/test/widget_test.dart
+
+      - name: Add packages (map and GPS)
+        working-directory: app
+        run: flutter pub add maplibre_gl geolocator
+
+      - name: Android settings (permissions, app name, minSdk 24)
+        working-directory: app
+        run: |
+          python3 - << 'PY'
+          import re, pathlib
+          m = pathlib.Path('android/app/src/main/AndroidManifest.xml')
+          s = m.read_text()
+          wanted = ['INTERNET', 'ACCESS_FINE_LOCATION', 'ACCESS_COARSE_LOCATION']
+          perms = ''
+          for p in wanted:
+              if p not in s:
+                  perms += '\n    <uses-permission android:name="android.permission.' + p + '" />'
+          s = re.sub(r'(<manifest[^>]*>)', lambda mo: mo.group(1) + perms, s, count=1)
+          s = re.sub(r'android:label="[^"]*"', 'android:label="RajRide"', s, count=1)
+          m.write_text(s)
+          PY
+          f=$(ls android/app/build.gradle.kts android/app/build.gradle 2>/dev/null | head -n 1)
+          sed -i -E 's/minSdk(Version)?( =)? *flutter\.minSdkVersion/minSdk = 24/' "$f"
+          grep -n "minSdk" "$f"
+          grep -n "uses-permission\|android:label" android/app/src/main/AndroidManifest.xml
+
+      - name: Check the code (shows problems, does not stop the build)
+        working-directory: app
+        run: flutter analyze
+        continue-on-error: true
+
+      - name: Build the APK
+        working-directory: app
+        run: flutter build apk --release
+
+      - name: Save the APK so you can download it
+        uses: actions/upload-artifact@v4
+        with:
+          name: rajride-apk
+          path: app/build/app/outputs/flutter-apk/app-release.apk
